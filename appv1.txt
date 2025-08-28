@@ -1,0 +1,111 @@
+from flask import Flask, request, render_template_string, jsonify
+from skin_cancer_backend import predict, generate_gpt_response
+import os
+
+app = Flask(__name__)
+last_result = "No current detection"
+
+# HTML template (inline)
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Doctor Skin</title>
+    <style>
+        body { font-family: Arial; margin: 40px; background: #eef; }
+        .container { max-width: 600px; margin: auto; }
+        input[type=file], input[type=text] { width: 100%; padding: 10px; margin: 10px 0; }
+        button { padding: 10px; width: 100%; background: #448; color: white; border: none; cursor: pointer; }
+        button:hover { background: #66a; }
+        .chat-box { border: 1px solid #ccc; background: #fff; padding: 10px; height: 300px; overflow-y: auto; margin-bottom: 10px; }
+        .message { margin: 5px 0; padding: 5px; border-radius: 5px; }
+        .user { background: #d0e7ff; text-align: right; }
+        .bot { background: #cde; text-align: left; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Doctor Skin</h1>
+
+    <h2>Upload skin lesion image:</h2>
+    <input type="file" id="imageInput">
+    <button onclick="uploadImage()">Analyze Image</button>
+
+    <h2>Chat with Doctor Skin:</h2>
+    <div id="chatBox" class="chat-box"></div>
+    <input type="text" id="chatInput" placeholder="Ask a question...">
+    <button onclick="sendMessage()">Send</button>
+</div>
+
+<script>
+function addMessage(message, sender) {
+    const chatBox = document.getElementById("chatBox");
+    const msgDiv = document.createElement("div");
+    msgDiv.className = 'message ' + sender;
+    msgDiv.innerText = message;
+    chatBox.appendChild(msgDiv);
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+function sendMessage() {
+    const input = document.getElementById("chatInput");
+    const message = input.value;
+    if (!message) return;
+    addMessage(message, "user");
+    input.value = "";
+
+    fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: message })
+    })
+    .then(res => res.json())
+    .then(data => addMessage(data.message, "bot"));
+}
+
+function uploadImage() {
+    const input = document.getElementById("imageInput");
+    if (input.files.length === 0) return;
+    const formData = new FormData();
+    formData.append("file", input.files[0]);
+
+    fetch("/upload", { method: "POST", body: formData })
+    .then(res => res.json())
+    .then(data => addMessage(data.message, "bot"));
+}
+</script>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route("/upload", methods=["POST"])
+def upload_image():
+    global last_result
+    if "file" in request.files:
+        file = request.files["file"]
+        if file.filename != "":
+            file_path = f"temp_{file.filename}"
+            file.save(file_path)
+            try:
+                last_result = predict(file_path)
+                os.remove(file_path)
+                return jsonify({"message": f"You may have: {last_result}"})
+            except Exception as e:
+                return jsonify({"message": f"Error analyzing image: {e}"})
+    return jsonify({"message": "No file uploaded"})
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    user_input = request.json.get("message", "")
+    try:
+        response = generate_gpt_response(user_input, last_result)
+        return jsonify({"message": response})
+    except Exception as e:
+        return jsonify({"message": f"Error generating response: {e}"})
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
